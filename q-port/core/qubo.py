@@ -85,6 +85,8 @@ def build_qubo_matrix(
     risk_aversion: float = 1.0,
     penalty_a: Optional[float] = None,
     penalty_b: Optional[float] = None,
+    manual_penalty_A: Optional[float] = None,
+    manual_penalty_B: Optional[float] = None,
     penalty_multiplier: float = 2.0,
     metadata_df: Optional[pd.DataFrame] = None
 ) -> Tuple[np.ndarray, float, Dict[str, Any]]:
@@ -97,6 +99,11 @@ def build_qubo_matrix(
       offset: scalar float constant
       qubo_info: Dict containing formulation details (K_target, A, B, sector targets, swing bound)
     """
+    if manual_penalty_A is not None and penalty_a is None:
+        penalty_a = manual_penalty_A
+    if manual_penalty_B is not None and penalty_b is None:
+        penalty_b = manual_penalty_B
+
     n = len(expected_returns)
     if n == 0:
         raise InvalidParameterError("Expected returns vector is empty.")

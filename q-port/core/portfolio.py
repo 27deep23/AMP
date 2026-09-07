@@ -11,6 +11,10 @@ from scipy.optimize import minimize
 from core.statistics import compute_portfolio_stats
 
 
+SUM_TOLERANCE: float = 1e-6
+CONSTRAINT_TOLERANCE: float = 1e-6
+
+
 def optimize_continuous_weights(
     selection_vector: np.ndarray,
     expected_returns: np.ndarray,
@@ -47,6 +51,7 @@ def optimize_continuous_weights(
         full_weights[selected_indices[0]] = 1.0
         stats = compute_portfolio_stats(full_weights, expected_returns, cov_matrix, returns_df, metadata_df, risk_free_rate)
         stats["stage_b_success"] = True
+        stats["status"] = "success"
         return stats
 
     # Extract sub-problem for selected assets
@@ -113,20 +118,20 @@ def optimize_continuous_weights(
 
     if res.success:
         w_opt = res.x
-        w_opt = np.clip(w_opt, min_weight, max_weight)
         sum_w = np.sum(w_opt)
-        if sum_w > 1e-12:
-            w_opt = w_opt / sum_w  # Normalize
 
-        # Post-solution constraint validation (1e-6 tolerance)
         violations = []
-        if abs(np.sum(w_opt) - 1.0) > 1e-6:
-            violations.append(f"Weight sum {np.sum(w_opt):.8f} != 1.0")
 
-        if np.any(w_opt > max_weight + 1e-6):
-            violations.append(f"Max weight limit ({max_weight:.1%}) exceeded by asset(s)")
+        # Check raw weight sum before any adjustments
+        if abs(sum_w - 1.0) > SUM_TOLERANCE:
+            violations.append(f"Raw weight sum {sum_w:.8f} != 1.0 (exceeds sum tolerance {SUM_TOLERANCE})")
+        else:
+            w_opt = w_opt / sum_w  # Normalize tiny numerical drift
 
-        if np.any(w_opt < min_weight - 1e-6):
+        if np.any(w_opt > max_weight + CONSTRAINT_TOLERANCE):
+            violations.append(f"Max weight limit ({max_weight:.1%}) exceeded")
+
+        if np.any(w_opt < min_weight - CONSTRAINT_TOLERANCE):
             violations.append(f"Min weight limit ({min_weight:.1%}) violated")
 
         if metadata_df is not None and "Sector" in metadata_df.columns and max_sector_weight < 1.0:
@@ -134,17 +139,17 @@ def optimize_continuous_weights(
             for sec in set(selected_sectors):
                 sec_mask = np.array([s == sec for s in selected_sectors], dtype=float)
                 sec_w = float(np.dot(w_opt, sec_mask))
-                if sec_w > max_sector_weight + 1e-6:
+                if sec_w > max_sector_weight + CONSTRAINT_TOLERANCE:
                     violations.append(f"Sector '{sec}' weight ({sec_w:.1%}) exceeds limit ({max_sector_weight:.1%})")
 
         if target_return is not None:
             ret_achieved = float(np.dot(w_opt, mu_sub))
-            if ret_achieved < target_return - 1e-6:
+            if ret_achieved < target_return - CONSTRAINT_TOLERANCE:
                 violations.append(f"Target return ({target_return:.2%}) not met ({ret_achieved:.2%})")
 
         if target_volatility is not None and target_volatility > 0:
             vol_achieved = float(np.sqrt(max(0.0, np.dot(w_opt, np.dot(cov_sub, w_opt)))))
-            if vol_achieved > target_volatility + 1e-6:
+            if vol_achieved > target_volatility + CONSTRAINT_TOLERANCE:
                 violations.append(f"Target volatility ({target_volatility:.2%}) exceeded ({vol_achieved:.2%})")
 
         if len(violations) > 0:
@@ -158,7 +163,7 @@ def optimize_continuous_weights(
                 risk_free_rate=risk_free_rate
             )
             stats["stage_b_success"] = False
-            stats["status"] = "constraint_violation"
+            stats["status"] = "constraint_validation_failed"
             stats["stage_b_message"] = "Post-optimization constraint violations: " + " | ".join(violations)
             return stats
 

@@ -9,7 +9,11 @@ from typing import Dict, Any, List
 
 BANNED_CLAIMS = [
     "quantum supremacy",
-    "quantum advantage proven for production",
+    "quantum advantage proven",
+    "q-port proves quantum advantage",
+    "qaoa guarantees quantum speedup",
+    "quantum is faster than classical",
+    "quantum superiority is demonstrated",
     "outperforms classical algorithms across all financial domains",
     "guaranteed quantum speedup",
     "replaces classical optimization"

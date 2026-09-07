@@ -108,6 +108,7 @@ def solve_qaoa(
     p: int = 1,
     shots: int = 1024,
     max_iterations: int = 200,
+    optimizer_name: str = "COBYLA",
     max_qubits: int = 24,
     max_runtime_sec: float = 30.0,
     seed: int = 42
@@ -145,7 +146,7 @@ def solve_qaoa(
         nonlocal eval_count, timed_out
         eval_count += 1
 
-        if time.perf_counter() > deadline:
+        if time.perf_counter() >= deadline:
             timed_out = True
             return 0.0  # Abort optimization loop
 
@@ -171,59 +172,79 @@ def solve_qaoa(
     # Initial parameter guess: [0.5, 0.5] repeated p times
     init_params = np.tile([0.5, 0.5], p)
 
-    # Run COBYLA parameter optimizer with configured max_iterations
+    # Choose outer-loop optimizer
+    opt_method = "COBYLA" if optimizer_name.upper() == "COBYLA" else "Nelder-Mead"
+
     res = minimize(
         qaoa_objective,
         x0=init_params,
-        method="COBYLA",
-        options={"maxiter": max_iterations, "rhobeg": 0.2}
+        method=opt_method,
+        options={"maxiter": max_iterations}
     )
 
     opt_gammas = res.x[0::2]
     opt_betas = res.x[1::2]
 
-    # Final measurement execution with optimal parameters
-    final_qc = build_qaoa_circuit(n, h, J, opt_gammas, opt_betas)
-    final_result = sim.run(final_qc, shots=shots * 2, seed_simulator=seed).result()
-    final_counts = final_result.get_counts()
+    # Pre-final measurement deadline check
+    if time.perf_counter() >= deadline:
+        timed_out = True
 
-    # Process all sampled bitstrings and filter for FEASIBLE candidates ONLY (sum x_i == K)
-    best_feasible_x = None
-    best_feasible_cost = float("inf")
-    feasible_count = 0
-    total_samples = sum(final_counts.values())
+    if not timed_out:
+        # Final measurement execution with optimal parameters using EXACT requested shots (NO shots * 2)
+        final_qc = build_qaoa_circuit(n, h, J, opt_gammas, opt_betas)
+        final_result = sim.run(final_qc, shots=shots, seed_simulator=seed).result()
+        final_counts = final_result.get_counts()
 
-    for bitstr, count in final_counts.items():
-        x_arr = np.array([int(b) for b in bitstr[::-1]], dtype=int)
-        cost = evaluate_qubo_cost(x_arr, Q, offset)
-        k_count = int(np.sum(x_arr))
-        is_feasible = (k_count == k_target)
-
-        if is_feasible:
-            feasible_count += count
-            if cost < best_feasible_cost:
-                best_feasible_cost = cost
-                best_feasible_x = x_arr.copy()
+        if time.perf_counter() >= deadline:
+            timed_out = True
+    else:
+        final_counts = {}
 
     t1 = time.perf_counter()
     runtime = t1 - t0
 
-    feasible_rate = float(feasible_count / total_samples)
+    # Post-Aer deadline check
+    if runtime >= max_runtime_sec:
+        timed_out = True
 
-    if best_feasible_x is not None:
-        best_bitstr_key = "".join(str(b) for b in best_feasible_x)
-        best_prob = float(final_counts.get(best_bitstr_key[::-1], 0) / total_samples)
-        status = "success"
-        best_x = best_feasible_x
-        best_cost = best_feasible_cost
+    if not timed_out and len(final_counts) > 0:
+        # Process all sampled bitstrings and filter for FEASIBLE candidates ONLY (sum x_i == K)
+        best_feasible_x = None
+        best_feasible_cost = float("inf")
+        feasible_count = 0
+        total_samples = sum(final_counts.values())
+
+        for bitstr, count in final_counts.items():
+            x_arr = np.array([int(b) for b in bitstr[::-1]], dtype=int)
+            cost = evaluate_qubo_cost(x_arr, Q, offset)
+            k_count = int(np.sum(x_arr))
+            is_feasible = (k_count == k_target)
+
+            if is_feasible:
+                feasible_count += count
+                if cost < best_feasible_cost:
+                    best_feasible_cost = cost
+                    best_feasible_x = x_arr.copy()
+
+        feasible_rate = float(feasible_count / total_samples) if total_samples > 0 else 0.0
+
+        if best_feasible_x is not None:
+            best_bitstr_key = "".join(str(b) for b in best_feasible_x)
+            best_prob = float(final_counts.get(best_bitstr_key[::-1], 0) / total_samples) if total_samples > 0 else 0.0
+            status = "success"
+            best_x = best_feasible_x
+            best_cost = best_feasible_cost
+        else:
+            best_prob = 0.0
+            status = "no_feasible_solution"
+            best_x = None
+            best_cost = None
     else:
+        feasible_rate = 0.0
         best_prob = 0.0
-        status = "no_feasible_solution"
+        status = "timeout" if timed_out else "no_feasible_solution"
         best_x = None
         best_cost = None
-
-    if timed_out:
-        status = "timeout"
 
     metrics = {
         "solver_type": "QAOA Quantum Engine (Qiskit Aer)",
@@ -231,10 +252,13 @@ def solve_qaoa(
         "actual_parameter_count": n_parameters,
         "configured_max_iterations": max_iterations,
         "actual_optimizer_iterations": eval_count,
+        "optimizer_name": optimizer_name,
         "n_qubits": n,
         "opt_gammas": [float(g) for g in opt_gammas],
         "opt_betas": [float(b) for b in opt_betas],
-        "shots": total_samples,
+        "optimization_shots": shots,
+        "final_measurement_shots": shots,
+        "shots": shots,
         "feasible_rate": feasible_rate,
         "best_probability": best_prob,
         "runtime_sec": runtime,

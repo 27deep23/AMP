@@ -9,6 +9,9 @@ import pandas as pd
 from typing import Dict, Any, Optional, Tuple
 
 
+from config.settings import COVARIANCE_EPSILON
+
+
 def compute_expected_returns(
     returns_df: pd.DataFrame,
     annualization_factor: int = 252
@@ -20,15 +23,18 @@ def compute_expected_returns(
 def compute_covariance_matrix(
     returns_df: pd.DataFrame,
     annualization_factor: int = 252,
-    epsilon: float = 1e-6
+    cov_epsilon: float = COVARIANCE_EPSILON,
+    epsilon: Optional[float] = None
 ) -> np.ndarray:
     """
     Computes annualized covariance matrix with epsilon-regularization for numerical stability.
-    Sigma_reg = Sigma + epsilon * I
+    Sigma_reg = Sigma + cov_epsilon * I
     """
+    if epsilon is not None:
+        cov_epsilon = epsilon
     cov_sample = returns_df.cov().to_numpy() * annualization_factor
     n = cov_sample.shape[0]
-    cov_reg = cov_sample + epsilon * np.eye(n)
+    cov_reg = cov_sample + cov_epsilon * np.eye(n)
     return cov_reg
 
 

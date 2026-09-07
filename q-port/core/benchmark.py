@@ -75,27 +75,38 @@ def run_benchmark_suite(
 
     # 3. Exact Enumeration (if requested and N <= 22)
     x_exact, cost_exact, t_exact = None, None, None
+    m_exact = {}
     has_exact = False
     if run_exact and n <= 22:
         try:
             x_exact, cost_exact, t_exact, m_exact = solve_exact_enumeration(Q, offset, k_target)
-            stats_exact = optimize_continuous_weights(
-                x_exact, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
-                target_return, target_volatility, returns_df, metadata_df, risk_free_rate
-            )
-            solver_data["Exact Enumeration"] = {"x": x_exact, "qubo_cost": cost_exact, "runtime": t_exact, "stats": stats_exact}
-            has_exact = True
+            if x_exact is not None and m_exact.get("is_exact", False):
+                stats_exact = optimize_continuous_weights(
+                    x_exact, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
+                    target_return, target_volatility, returns_df, metadata_df, risk_free_rate
+                )
+                solver_data["Exact Enumeration"] = {
+                    "x": x_exact,
+                    "qubo_cost": cost_exact,
+                    "runtime": t_exact,
+                    "stats": stats_exact,
+                    "is_exact": True
+                }
+                has_exact = True
+            else:
+                has_exact = False
         except Exception:
             has_exact = False
 
     # 4. QAOA Quantum Engine (if requested and N <= 24)
     if run_qaoa and n <= 24:
         x_qaoa, cost_qaoa, t_qaoa, m_qaoa = solve_qaoa(Q, offset, k_target, p=qaoa_p, shots=qaoa_shots, seed=seed)
-        stats_qaoa = optimize_continuous_weights(
-            x_qaoa, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
-            target_return, target_volatility, returns_df, metadata_df, risk_free_rate
-        )
-        solver_data["QAOA (Quantum)"] = {"x": x_qaoa, "qubo_cost": cost_qaoa, "runtime": t_qaoa, "stats": stats_qaoa, "quantum_metrics": m_qaoa}
+        if x_qaoa is not None:
+            stats_qaoa = optimize_continuous_weights(
+                x_qaoa, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
+                target_return, target_volatility, returns_df, metadata_df, risk_free_rate
+            )
+            solver_data["QAOA (Quantum)"] = {"x": x_qaoa, "qubo_cost": cost_qaoa, "runtime": t_qaoa, "stats": stats_qaoa, "quantum_metrics": m_qaoa}
 
     # 5. Equal Weight Baseline (1/N across all N assets)
     t0_eq = time.perf_counter()
@@ -117,15 +128,24 @@ def run_benchmark_suite(
     t_mv = time.perf_counter() - t0_mv
     solver_data["Continuous Mean-Variance"] = {"x": x_unconstrained, "qubo_cost": cost_mv, "runtime": t_mv, "stats": stats_mv}
 
-    # Determine baseline reference cost for Optimality Gap calculation
-    if has_exact:
+    # Determine baseline reference cost & terminology for Optimality Gap calculation
+    if has_exact and cost_exact is not None:
         ref_cost = cost_exact
         ref_name = "Exact Optimum"
+        gap_col_name = "Optimality Gap (%)"
+    elif m_exact.get("timed_out", False):
+        ref_cost = min([data["qubo_cost"] for name, data in solver_data.items() if name in ["Greedy", "Simulated Annealing"]])
+        ref_name = "Exact reference unavailable — runtime budget exceeded."
+        gap_col_name = "Gap to Best Known Discrete Solution (%)"
+    elif m_exact.get("budget_exceeded_states", False):
+        ref_cost = min([data["qubo_cost"] for name, data in solver_data.items() if name in ["Greedy", "Simulated Annealing"]])
+        ref_name = "Exact reference unavailable — state-count budget exceeded."
+        gap_col_name = "Gap to Best Known Discrete Solution (%)"
     else:
-        # Best classical discrete solution cost
         discrete_costs = [data["qubo_cost"] for name, data in solver_data.items() if name in ["Greedy", "Simulated Annealing"]]
         ref_cost = min(discrete_costs) if discrete_costs else cost_greedy
         ref_name = "Best Known Discrete Solution (Classical Heuristic)"
+        gap_col_name = "Gap to Best Known Discrete Solution (%)"
 
     # Assemble summary table
     tickers = list(returns_df.columns)
@@ -135,8 +155,8 @@ def run_benchmark_suite(
         x_vec = data["x"]
         selected_tickers = [tickers[idx] for idx, val in enumerate(x_vec) if val == 1]
 
-        # Calculate Optimality Gap (%)
-        if ref_cost != 0:
+        # Calculate Gap (%)
+        if ref_cost != 0 and cost is not None:
             gap_pct = float((cost - ref_cost) / abs(ref_cost) * 100.0)
         else:
             gap_pct = 0.0
@@ -146,7 +166,8 @@ def run_benchmark_suite(
         results_list.append({
             "Method": method_name,
             "Stage-A QUBO Cost": cost,
-            "Optimality Gap (%)": gap_pct,
+            "Optimality Gap (%)": gap_pct if has_exact else None,
+            "Gap to Best Known Discrete Solution (%)": gap_pct,
             "Expected Return (%)": st["expected_return"] * 100.0,
             "Annual Volatility (%)": st["volatility"] * 100.0,
             "Sharpe Ratio": st["sharpe_ratio"],
@@ -164,6 +185,7 @@ def run_benchmark_suite(
         "reference_baseline_name": ref_name,
         "reference_cost": ref_cost,
         "is_exact_reference": has_exact,
+        "gap_column_name": gap_col_name,
         "n_assets": n,
         "k_target": k_target,
         "risk_aversion": risk_aversion

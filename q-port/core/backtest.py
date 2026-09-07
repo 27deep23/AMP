@@ -87,11 +87,31 @@ def run_walk_forward_backtest(
         st_greedy = optimize_continuous_weights(x_greedy, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
         w_greedy = st_greedy["weights"]
 
-        # Q-PORT weights
+        # Q-PORT weights calculation
+        qaoa_status = "proxy"
+        qaoa_runtime = 0.0
+        qaoa_feasible = True
+
         if use_real_qaoa:
-            x_qaoa, _, _, _ = solve_qaoa(Q, offset, k_target, p=qaoa_p, shots=qaoa_shots, seed=seed)
-            st_qaoa = optimize_continuous_weights(x_qaoa, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
-            w_qport = st_qaoa["weights"]
+            try:
+                x_qaoa, cost_qaoa, t_qaoa, m_qaoa = solve_qaoa(Q, offset, k_target, p=qaoa_p, shots=qaoa_shots, seed=seed)
+                qaoa_status = m_qaoa.get("status", "unknown")
+                qaoa_runtime = t_qaoa
+                qaoa_feasible = m_qaoa.get("is_feasible", False)
+
+                if x_qaoa is not None and qaoa_status == "success":
+                    st_qaoa = optimize_continuous_weights(x_qaoa, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
+                    if st_qaoa.get("stage_b_success", False):
+                        w_qport = st_qaoa["weights"]
+                    else:
+                        w_qport = np.zeros(len(mu_train))
+                else:
+                    # Period unavailable - zero return, do not silently substitute Greedy/Equal Weight!
+                    w_qport = np.zeros(len(mu_train))
+            except Exception:
+                qaoa_status = "failed"
+                qaoa_feasible = False
+                w_qport = np.zeros(len(mu_train))
         else:
             w_qport = w_greedy
 
@@ -152,7 +172,12 @@ def run_walk_forward_backtest(
         "start_date": str(oos_dates[0].date()) if oos_dates else "",
         "end_date": str(oos_dates[-1].date()) if oos_dates else "",
         "qaoa_real_execution": use_real_qaoa,
-        "qport_label": qport_label
+        "qport_label": qport_label,
+        "periods_evaluated": len(rebal_starts),
+        "successful_qaoa_periods": len(rebal_starts) if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status == "success"),
+        "failed_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status in ["failed", "optimization_failed"]),
+        "timeout_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status == "timeout"),
+        "unavailable_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status in ["no_feasible_solution", "timeout", "failed"])
     }
 
     return equity_curves_df, summary_metrics_df, backtest_info

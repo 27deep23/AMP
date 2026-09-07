@@ -177,7 +177,7 @@ def solve_exact_enumeration(
     k_target: int,
     max_state_count: int = 2**22,
     max_runtime_sec: float = 10.0
-) -> Tuple[np.ndarray, float, float, Dict[str, Any]]:
+) -> Tuple[Optional[np.ndarray], Optional[float], float, Dict[str, Any]]:
     """
     Exact Enumeration (Classical Brute-Force) solver.
     Evaluates combinations C(N, K) with strict dual budget limits:
@@ -192,10 +192,19 @@ def solve_exact_enumeration(
 
     # Check state count ceiling
     if num_combinations > max_state_count:
-        raise InvalidParameterError(
-            f"Exact enumeration state count ({num_combinations:,}) exceeds maximum allowed limit ({max_state_count:,}). "
-            "Skipping exact solver to preserve computational resources."
-        )
+        runtime = time.perf_counter() - t0
+        metrics = {
+            "solver_type": "Exact Enumeration (Classical Brute-Force)",
+            "total_combinations": num_combinations,
+            "evaluated_combinations": 0,
+            "runtime_sec": runtime,
+            "timed_out": False,
+            "budget_exceeded_states": True,
+            "is_exact": False,
+            "is_feasible": False,
+            "status": "state_count_budget_exceeded"
+        }
+        return None, None, runtime, metrics
 
     best_x = np.zeros(n, dtype=int)
     best_cost = float("inf")
@@ -223,14 +232,18 @@ def solve_exact_enumeration(
     t1 = time.perf_counter()
     runtime = t1 - t0
 
+    is_exact = (not timed_out) and (evaluated_count == num_combinations)
+
     metrics = {
         "solver_type": "Exact Enumeration (Classical Brute-Force)",
         "total_combinations": num_combinations,
         "evaluated_combinations": evaluated_count,
         "runtime_sec": runtime,
         "timed_out": timed_out,
-        "is_exact": not timed_out and (evaluated_count == num_combinations),
-        "is_feasible": int(np.sum(best_x)) == k_target
+        "budget_exceeded_states": False,
+        "is_exact": is_exact,
+        "is_feasible": int(np.sum(best_x)) == k_target if best_x is not None else False,
+        "status": "success" if is_exact else ("timeout" if timed_out else "incomplete")
     }
 
     return best_x, best_cost, runtime, metrics

@@ -38,9 +38,10 @@ def test_exact_enumeration_global_optimum():
 
 
 def test_exact_enumeration_state_count_ceiling():
-    """Verify exact solver raises InvalidParameterError if total states > 2^22 limit."""
+    """Verify exact solver sets budget_exceeded_states=True if total states > 2^22 limit."""
     # N=30, K=15 => C(30, 15) = 155,117,520 > 2^22 (4,194,304)
     dummy_Q = np.zeros((30, 30))
-    with pytest.raises(InvalidParameterError) as exc_info:
-        solve_exact_enumeration(dummy_Q, offset=0.0, k_target=15, max_state_count=2**22)
-    assert "exceeds maximum allowed limit" in str(exc_info.value)
+    best_x, best_cost, runtime, metrics = solve_exact_enumeration(dummy_Q, offset=0.0, k_target=15, max_state_count=2**22)
+    assert metrics["budget_exceeded_states"] is True
+    assert metrics["is_exact"] is False
+    assert best_x is None
