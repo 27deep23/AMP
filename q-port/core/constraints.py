@@ -50,13 +50,15 @@ def validate_optimization_config(
 
     # Target integer K calculation
     k_target_float = (k_min + k_max) / 2.0
+    if not np.isclose(k_target_float, round(k_target_float)):
+        errors.append(
+            f"Non-integer asset cardinality target K: (k_min + k_max) / 2 = {k_target_float}. "
+            f"k_min ({k_min}) and k_max ({k_max}) must sum to an even number."
+        )
     k_target_int = int(round(k_target_float))
     params["target_k"] = k_target_int
     params["k_min"] = k_min
     params["k_max"] = k_max
-
-    if not np.isclose(k_target_float, k_target_int):
-        warnings.append(f"Midpoint target K={k_target_float} is non-integer. Rounding to target_k={k_target_int}.")
 
     # 3. Maximum continuous weight feasibility
     # If max_weight * k_max < 1.0, sum of weights across at most k_max assets cannot equal 1.0

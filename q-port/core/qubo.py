@@ -16,7 +16,8 @@ def allocate_sector_targets(
     k_target: int
 ) -> Dict[str, int]:
     """
-    Allocates integer sector targets K_s using largest-remainder method so sum(K_s) == K.
+    Allocates integer sector targets K_s using deterministic largest-remainder method so sum(K_s) == K.
+    R_s = K * N_s / N
     """
     df_sec = pd.Series(sector_list)
     sector_counts = df_sec.value_counts()
@@ -25,7 +26,7 @@ def allocate_sector_targets(
     if n_total == 0 or k_target == 0:
         return {}
 
-    # Exact fractional targets
+    # Exact fractional targets R_s = K * N_s / N
     fractions = {sec: (count / n_total) * k_target for sec, count in sector_counts.items()}
     floors = {sec: int(np.floor(f)) for sec, f in fractions.items()}
     remainders = {sec: fractions[sec] - floors[sec] for sec in fractions}
@@ -49,17 +50,32 @@ def calibrate_penalties(
     cov_matrix: np.ndarray,
     risk_aversion: float = 1.0,
     penalty_multiplier: float = 2.0
-) -> float:
+) -> Tuple[float, float]:
     """
-    Calibrates penalty coefficients A and B based on the instance's objective swing bound.
-    swing = max(mu) - min(mu) + lambda * max(diag(Sigma))
-    A = B = penalty_multiplier * swing
+    Calibrates penalty coefficients A and B based on the actual instance's objective swing bound:
+      objective_swing_bound = max(|mu_i|) * N + lambda * max(eigenvalues(Sigma)) * N^2
+      Penalty = multiplier * objective_swing_bound
+    
+    Returns:
+      (penalty, objective_swing_bound)
     """
-    ret_swing = float(np.max(expected_returns) - np.min(expected_returns)) if len(expected_returns) > 0 else 1.0
-    risk_swing = float(risk_aversion * np.max(np.diag(cov_matrix))) if len(cov_matrix) > 0 else 1.0
-    bound = max(0.1, ret_swing + risk_swing)
+    n = len(expected_returns)
+    if n == 0:
+        return 1.0, 0.5
+
+    max_abs_ret = float(np.max(np.abs(expected_returns)))
+    
+    if len(cov_matrix) > 0 and cov_matrix.shape[0] == n:
+        eigvals = np.linalg.eigvalsh(cov_matrix)
+        max_eig = float(np.max(eigvals))
+    else:
+        max_eig = 0.1
+
+    bound = (max_abs_ret * n) + (risk_aversion * max_eig * (n ** 2))
+    bound = max(0.1, float(bound))
     penalty = penalty_multiplier * bound
-    return float(penalty)
+
+    return float(penalty), bound
 
 
 def build_qubo_matrix(
@@ -79,7 +95,7 @@ def build_qubo_matrix(
     Returns:
       Q: N x N upper-triangular or symmetric numpy matrix
       offset: scalar float constant
-      qubo_info: Dict containing formulation details (K_target, A, B, sector targets)
+      qubo_info: Dict containing formulation details (K_target, A, B, sector targets, swing bound)
     """
     n = len(expected_returns)
     if n == 0:
@@ -88,10 +104,12 @@ def build_qubo_matrix(
     if k_target < 1 or k_target > n:
         raise InvalidParameterError(f"Target K ({k_target}) must be between 1 and N ({n}).")
 
-    # Calibrate penalties if not explicitly supplied
-    default_penalty = calibrate_penalties(expected_returns, cov_matrix, risk_aversion, penalty_multiplier)
-    A = float(penalty_a if penalty_a is not None else default_penalty)
-    B = float(penalty_b if penalty_b is not None else default_penalty)
+    # Calibrate penalties dynamically
+    auto_penalty, swing_bound = calibrate_penalties(expected_returns, cov_matrix, risk_aversion, penalty_multiplier)
+
+    is_manual_override = (penalty_a is not None or penalty_b is not None)
+    A = float(penalty_a if penalty_a is not None else auto_penalty)
+    B = float(penalty_b if penalty_b is not None else auto_penalty)
 
     # Sector target allocation
     sector_targets = {}
@@ -138,8 +156,12 @@ def build_qubo_matrix(
         "n_assets": n,
         "k_target": k_target,
         "risk_aversion": risk_aversion,
+        "objective_swing_bound": swing_bound,
+        "penalty_multiplier": penalty_multiplier,
+        "auto_penalty": auto_penalty,
         "penalty_A": A,
         "penalty_B": B,
+        "is_manual_override": is_manual_override,
         "sector_targets": sector_targets,
         "offset": offset
     }
@@ -163,7 +185,7 @@ def evaluate_direct_objective(
     penalty_B: float,
     metadata_df: Optional[pd.DataFrame] = None
 ) -> float:
-    """Evaluates the direct mathematical cost function C(x) without matrix Q."""
+    """Evaluates direct mathematical cost function C(x) without matrix Q."""
     x_vec = np.asarray(x, dtype=float)
     k_selected = np.sum(x_vec)
 

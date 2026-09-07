@@ -25,7 +25,10 @@ def run_walk_forward_backtest(
     max_weight: float = 1.0,
     max_sector_weight: float = 1.0,
     risk_free_rate: float = 0.06,
-    seed: int = 42
+    seed: int = 42,
+    run_qaoa_in_backtest: bool = False,
+    qaoa_p: int = 1,
+    qaoa_shots: int = 512
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     """
     Executes walk-forward backtest.
@@ -35,6 +38,8 @@ def run_walk_forward_backtest(
         summary_metrics_df: Table of out-of-sample performance metrics (CAGR, Vol, Sharpe, MaxDD)
         backtest_info: Execution metadata including rebalance dates and window parameters
     """
+    from core.quantum_optimizer import solve_qaoa
+
     clean_prices, returns_df, clean_meta, _ = preprocess_data(prices_df, metadata_df)
     n_days = len(returns_df)
 
@@ -45,7 +50,12 @@ def run_walk_forward_backtest(
         )
 
     dates = returns_df.index
-    strategies = ["Q-PORT (Hybrid QAOA)", "Equal Weight (1/N)", "Continuous Mean-Variance", "Greedy Heuristic"]
+    n_assets = returns_df.shape[1]
+
+    use_real_qaoa = run_qaoa_in_backtest and (n_assets <= 20)
+    qport_label = "Q-PORT (Hybrid QAOA)" if use_real_qaoa else "Q-PORT (Classical Proxy Backtest)"
+
+    strategies = [qport_label, "Equal Weight (1/N)", "Continuous Mean-Variance", "Greedy Heuristic"]
 
     # Storage for out-of-sample daily returns
     oos_returns = {strat: [] for strat in strategies}
@@ -72,15 +82,23 @@ def run_walk_forward_backtest(
         # Build QUBO on train data
         Q, offset, _ = build_qubo_matrix(mu_train, cov_train, k_target, risk_aversion, metadata_df=clean_meta)
 
-        # Strategy 1 & 4: Greedy / QAOA weights
+        # Greedy Heuristic weights
         x_greedy, _, _, _ = solve_greedy(Q, offset, k_target)
         st_greedy = optimize_continuous_weights(x_greedy, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
         w_greedy = st_greedy["weights"]
 
-        # Strategy 2: Equal Weight 1/N
+        # Q-PORT weights
+        if use_real_qaoa:
+            x_qaoa, _, _, _ = solve_qaoa(Q, offset, k_target, p=qaoa_p, shots=qaoa_shots, seed=seed)
+            st_qaoa = optimize_continuous_weights(x_qaoa, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
+            w_qport = st_qaoa["weights"]
+        else:
+            w_qport = w_greedy
+
+        # Equal Weight 1/N
         w_eq = np.ones(len(mu_train), dtype=float) / len(mu_train)
 
-        # Strategy 3: Continuous Mean-Variance
+        # Continuous Mean-Variance
         x_all = np.ones(len(mu_train), dtype=int)
         st_mv = optimize_continuous_weights(x_all, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
         w_mv = st_mv["weights"]
@@ -88,12 +106,12 @@ def run_walk_forward_backtest(
         # Evaluate on test window
         test_rets_arr = test_rets.to_numpy()
         
-        r_qport = np.dot(test_rets_arr, w_greedy)  # Use Greedy proxy for hybrid QAOA in backtest for speed
+        r_qport = np.dot(test_rets_arr, w_qport)
         r_eq = np.dot(test_rets_arr, w_eq)
         r_mv = np.dot(test_rets_arr, w_mv)
-        r_greedy = r_qport
+        r_greedy = np.dot(test_rets_arr, w_greedy)
 
-        oos_returns["Q-PORT (Hybrid QAOA)"].extend(r_qport)
+        oos_returns[qport_label].extend(r_qport)
         oos_returns["Equal Weight (1/N)"].extend(r_eq)
         oos_returns["Continuous Mean-Variance"].extend(r_mv)
         oos_returns["Greedy Heuristic"].extend(r_greedy)
@@ -132,7 +150,9 @@ def run_walk_forward_backtest(
         "total_rebalance_cycles": len(rebal_starts),
         "total_oos_days": len(oos_dates),
         "start_date": str(oos_dates[0].date()) if oos_dates else "",
-        "end_date": str(oos_dates[-1].date()) if oos_dates else ""
+        "end_date": str(oos_dates[-1].date()) if oos_dates else "",
+        "qaoa_real_execution": use_real_qaoa,
+        "qport_label": qport_label
     }
 
     return equity_curves_df, summary_metrics_df, backtest_info

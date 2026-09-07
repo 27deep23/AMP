@@ -40,7 +40,7 @@ def test_benchmark_suite_execution():
     assert "Continuous Mean-Variance" in methods
 
     assert bench_info["is_exact_reference"] is True
-    assert bench_info["reference_baseline_name"] == "Exact Enumeration (Global Optimum)"
+    assert bench_info["reference_baseline_name"] == "Exact Optimum"
 
     # Exact Enumeration gap must be 0.0%
     exact_row = results_df[results_df["Method"] == "Exact Enumeration"]

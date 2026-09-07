@@ -24,10 +24,11 @@ def test_calibrate_penalties():
     mu = np.array([0.10, 0.30])
     cov = np.array([[0.04, 0.0], [0.0, 0.09]])
     
-    # swing = (0.30 - 0.10) + 1.0 * 0.09 = 0.20 + 0.09 = 0.29
-    # default penalty_multiplier = 2.0 => penalty = 0.58
-    p = calibrate_penalties(mu, cov, risk_aversion=1.0, penalty_multiplier=2.0)
-    assert pytest.approx(p, abs=1e-5) == 0.58
+    # swing_bound = max_abs_ret * N + risk_aversion * max_eig * N^2 = 0.30 * 2 + 1.0 * 0.09 * 4 = 0.60 + 0.36 = 0.96
+    # multiplier = 2.0 => penalty = 1.92
+    penalty_A, swing_bound = calibrate_penalties(mu, cov, risk_aversion=1.0, penalty_multiplier=2.0)
+    assert pytest.approx(penalty_A, abs=1e-5) == 1.92
+    assert pytest.approx(swing_bound, abs=1e-5) == 0.96
 
 
 def test_build_qubo_matrix_shape():

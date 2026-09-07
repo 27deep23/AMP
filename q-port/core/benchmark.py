@@ -98,30 +98,34 @@ def run_benchmark_suite(
         solver_data["QAOA (Quantum)"] = {"x": x_qaoa, "qubo_cost": cost_qaoa, "runtime": t_qaoa, "stats": stats_qaoa, "quantum_metrics": m_qaoa}
 
     # 5. Equal Weight Baseline (1/N across all N assets)
+    t0_eq = time.perf_counter()
     x_eq = np.ones(n, dtype=int)
     w_eq = np.ones(n, dtype=float) / n
     stats_eq = compute_portfolio_stats(w_eq, mu, cov, returns_df, metadata_df, risk_free_rate)
     cost_eq = evaluate_qubo_cost(x_eq, Q, offset)
-    solver_data["Equal Weight (1/N)"] = {"x": x_eq, "qubo_cost": cost_eq, "runtime": 0.001, "stats": stats_eq}
+    t_eq = time.perf_counter() - t0_eq
+    solver_data["Equal Weight (1/N)"] = {"x": x_eq, "qubo_cost": cost_eq, "runtime": t_eq, "stats": stats_eq}
 
     # 6. Unconstrained Classical Continuous Mean-Variance Baseline
+    t0_mv = time.perf_counter()
     x_unconstrained = np.ones(n, dtype=int)
     stats_mv = optimize_continuous_weights(
         x_unconstrained, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
         target_return, target_volatility, returns_df, metadata_df, risk_free_rate
     )
     cost_mv = evaluate_qubo_cost(x_unconstrained, Q, offset)
-    solver_data["Continuous Mean-Variance"] = {"x": x_unconstrained, "qubo_cost": cost_mv, "runtime": 0.01, "stats": stats_mv}
+    t_mv = time.perf_counter() - t0_mv
+    solver_data["Continuous Mean-Variance"] = {"x": x_unconstrained, "qubo_cost": cost_mv, "runtime": t_mv, "stats": stats_mv}
 
     # Determine baseline reference cost for Optimality Gap calculation
     if has_exact:
         ref_cost = cost_exact
-        ref_name = "Exact Enumeration (Global Optimum)"
+        ref_name = "Exact Optimum"
     else:
         # Best classical discrete solution cost
         discrete_costs = [data["qubo_cost"] for name, data in solver_data.items() if name in ["Greedy", "Simulated Annealing"]]
         ref_cost = min(discrete_costs) if discrete_costs else cost_greedy
-        ref_name = "Best Classical Heuristic Baseline"
+        ref_name = "Best Known Discrete Solution (Classical Heuristic)"
 
     # Assemble summary table
     tickers = list(returns_df.columns)

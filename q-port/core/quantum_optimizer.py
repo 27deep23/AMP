@@ -1,8 +1,9 @@
 """
 QAOA Quantum Engine for Q-PORT.
-Translates QUBO formulation Q into Ising spin Hamiltonian H_C, builds p-layer QAOA circuit,
-and executes simulation using Qiskit Aer local CPU simulator.
-Enforces <=24 qubit ceiling and wall-clock timeout protection.
+Translates QUBO formulation Q into Ising spin Hamiltonian H_C, builds genuine p-layer QAOA circuit
+with 2p parameters [gamma_1, beta_1, ..., gamma_p, beta_p], and executes simulation using Qiskit Aer.
+Enforces strict feasible-only candidate filtering (sum x_i == K), deadline-based timeout,
+and <=24 qubit ceiling enforcement.
 """
 
 import time
@@ -58,33 +59,43 @@ def build_qaoa_circuit(
     n_qubits: int,
     h: np.ndarray,
     J: np.ndarray,
-    gamma: float,
-    beta: float
+    gammas: np.ndarray,
+    betas: np.ndarray
 ) -> QuantumCircuit:
     """
-    Builds a 1-layer QAOA circuit for Ising Hamiltonian (h, J).
+    Builds a genuine p-layer QAOA circuit for Ising Hamiltonian (h, J).
+    `gammas` and `betas` must be 1D arrays of length p.
     """
+    p = len(gammas)
+    if len(betas) != p:
+        raise ValueError(f"Length of gammas ({p}) and betas ({len(betas)}) must match.")
+
     qc = QuantumCircuit(n_qubits)
 
-    # Initial state: Hadamard on all qubits
+    # Initial state: Hadamard on all qubits (|=>^N)
     for i in range(n_qubits):
         qc.h(i)
 
-    # Cost Hamiltonian evolution: exp(-i * gamma * H_C)
-    # 1. Single-qubit Z terms: exp(-i * gamma * h_i * Z_i) = rz(2 * gamma * h_i)
-    for i in range(n_qubits):
-        if not np.isclose(h[i], 0.0):
-            qc.rz(2.0 * gamma * h[i], i)
+    # Apply p alternating QAOA layers
+    for layer in range(p):
+        gamma_k = float(gammas[layer])
+        beta_k = float(betas[layer])
 
-    # 2. Two-qubit ZZ coupling terms: exp(-i * gamma * J_ij * Z_i Z_j)
-    for i in range(n_qubits):
-        for j in range(i + 1, n_qubits):
-            if not np.isclose(J[i, j], 0.0):
-                qc.rzz(2.0 * gamma * J[i, j], i, j)
+        # 1. Cost Hamiltonian evolution: exp(-i * gamma_k * H_C)
+        # Single-qubit Z terms: exp(-i * gamma_k * h_i * Z_i) = rz(2 * gamma_k * h_i)
+        for i in range(n_qubits):
+            if not np.isclose(h[i], 0.0):
+                qc.rz(2.0 * gamma_k * h[i], i)
 
-    # Mixer Hamiltonian evolution: exp(-i * beta * sum X_i) = rx(2 * beta) on all qubits
-    for i in range(n_qubits):
-        qc.rx(2.0 * beta, i)
+        # Two-qubit ZZ coupling terms: exp(-i * gamma_k * J_ij * Z_i Z_j) = rzz(2 * gamma_k * J_ij)
+        for i in range(n_qubits):
+            for j in range(i + 1, n_qubits):
+                if not np.isclose(J[i, j], 0.0):
+                    qc.rzz(2.0 * gamma_k * J[i, j], i, j)
+
+        # 2. Mixer Hamiltonian evolution: exp(-i * beta_k * sum X_i) = rx(2 * beta_k) on all qubits
+        for i in range(n_qubits):
+            qc.rx(2.0 * beta_k, i)
 
     qc.measure_all()
     return qc
@@ -96,27 +107,25 @@ def solve_qaoa(
     k_target: int,
     p: int = 1,
     shots: int = 1024,
+    max_iterations: int = 200,
     max_qubits: int = 24,
     max_runtime_sec: float = 30.0,
     seed: int = 42
-) -> Tuple[np.ndarray, float, float, Dict[str, Any]]:
+) -> Tuple[Optional[np.ndarray], Optional[float], float, Dict[str, Any]]:
     """
-    Executes QAOA algorithm using Qiskit Aer local CPU simulator.
-    
-    Returns:
-        best_x: binary vector corresponding to best sampled QUBO solution
-        best_cost: scalar QUBO cost of best_x
-        runtime_sec: total execution wall-clock time
-        metrics: dict of quantum execution diagnostics
+    Executes genuine p-layer QAOA algorithm using Qiskit Aer local CPU simulator.
+    Uses 2p parameters [gamma_1, beta_1, ..., gamma_p, beta_p].
+    Enforces strict feasible-only candidate selection (sum x_i == K) and deadline-based timeout model.
     """
     t0 = time.perf_counter()
+    deadline = t0 + max_runtime_sec
     n = Q.shape[0]
 
     # Qubit ceiling check
     if n > max_qubits:
         raise InvalidParameterError(
-            f"QAOA qubit count N={n} exceeds maximum local CPU limit ({max_qubits}). "
-            "Skipping QAOA execution to prevent memory overflow."
+            f"QAOA qubit count N={n} exceeds maximum local CPU ceiling ({max_qubits}). "
+            "Skipping QAOA execution to prevent local CPU memory overflow."
         )
 
     # Convert QUBO to Ising
@@ -125,51 +134,62 @@ def solve_qaoa(
     # Initialize Qiskit Aer simulator
     sim = AerSimulator(seed_simulator=seed)
 
-    # Classical outer-loop parameter optimizer (COBYLA)
-    def qaoa_objective(params):
-        if (time.perf_counter() - t0) > max_runtime_sec:
-            return 0.0  # Early stop signal
+    # Parameter vector length = 2 * p: [gamma_1, beta_1, ..., gamma_p, beta_p]
+    n_parameters = 2 * p
 
-        gamma, beta = params[0], params[1]
-        qc = build_qaoa_circuit(n, h, J, gamma, beta)
+    eval_count = 0
+    timed_out = False
+
+    # Classical outer-loop objective: expected QUBO cost
+    def qaoa_objective(params):
+        nonlocal eval_count, timed_out
+        eval_count += 1
+
+        if time.perf_counter() > deadline:
+            timed_out = True
+            return 0.0  # Abort optimization loop
+
+        gammas = params[0::2]
+        betas = params[1::2]
+
+        qc = build_qaoa_circuit(n, h, J, gammas, betas)
         result = sim.run(qc, shots=shots, seed_simulator=seed).result()
         counts = result.get_counts()
 
-        # Compute expectation value of QUBO cost
+        # Expectation value of QUBO cost
         exp_cost = 0.0
-        total_shots = sum(counts.values())
+        tot_shots = sum(counts.values())
 
         for bitstr, count in counts.items():
-            # Qiskit returns bitstrings in little-endian order (bit 0 is rightmost)
-            # Reverse to match asset indexing [0..N-1]
+            # Qiskit bitstrings are little-endian (bit 0 rightmost)
             x_arr = np.array([int(b) for b in bitstr[::-1]], dtype=int)
             cost = evaluate_qubo_cost(x_arr, Q, offset)
             exp_cost += cost * count
 
-        return exp_cost / total_shots
+        return exp_cost / tot_shots
 
-    # Initial parameter guess
-    init_params = np.array([0.5, 0.5])
-    
-    # Run COBYLA parameter optimization
+    # Initial parameter guess: [0.5, 0.5] repeated p times
+    init_params = np.tile([0.5, 0.5], p)
+
+    # Run COBYLA parameter optimizer with configured max_iterations
     res = minimize(
         qaoa_objective,
         x0=init_params,
         method="COBYLA",
-        options={"maxiter": 30, "rhobeg": 0.2}
+        options={"maxiter": max_iterations, "rhobeg": 0.2}
     )
 
-    opt_gamma, opt_beta = res.x[0], res.x[1]
+    opt_gammas = res.x[0::2]
+    opt_betas = res.x[1::2]
 
-    # Final measurement run with optimal parameters and larger shot count
-    final_qc = build_qaoa_circuit(n, h, J, opt_gamma, opt_beta)
-    final_result = sim.run(final_qc, shots=shots*2, seed_simulator=seed).result()
+    # Final measurement execution with optimal parameters
+    final_qc = build_qaoa_circuit(n, h, J, opt_gammas, opt_betas)
+    final_result = sim.run(final_qc, shots=shots * 2, seed_simulator=seed).result()
     final_counts = final_result.get_counts()
 
-    # Process all sampled bitstrings
-    bitstring_records = []
-    best_x = np.zeros(n, dtype=int)
-    best_cost = float("inf")
+    # Process all sampled bitstrings and filter for FEASIBLE candidates ONLY (sum x_i == K)
+    best_feasible_x = None
+    best_feasible_cost = float("inf")
     feasible_count = 0
     total_samples = sum(final_counts.values())
 
@@ -181,38 +201,45 @@ def solve_qaoa(
 
         if is_feasible:
             feasible_count += count
-
-        if cost < best_cost:
-            best_cost = cost
-            best_x = x_arr.copy()
-
-        bitstring_records.append({
-            "bitstring": bitstr[::-1],
-            "cost": cost,
-            "count": count,
-            "probability": count / total_samples,
-            "is_feasible": is_feasible
-        })
+            if cost < best_feasible_cost:
+                best_feasible_cost = cost
+                best_feasible_x = x_arr.copy()
 
     t1 = time.perf_counter()
     runtime = t1 - t0
 
-    # Best sampled probability
-    best_bitstr_key = "".join(str(b) for b in best_x)
-    best_prob = final_counts.get(best_bitstr_key[::-1], 0) / total_samples
+    feasible_rate = float(feasible_count / total_samples)
+
+    if best_feasible_x is not None:
+        best_bitstr_key = "".join(str(b) for b in best_feasible_x)
+        best_prob = float(final_counts.get(best_bitstr_key[::-1], 0) / total_samples)
+        status = "success"
+        best_x = best_feasible_x
+        best_cost = best_feasible_cost
+    else:
+        best_prob = 0.0
+        status = "no_feasible_solution"
+        best_x = None
+        best_cost = None
+
+    if timed_out:
+        status = "timeout"
 
     metrics = {
         "solver_type": "QAOA Quantum Engine (Qiskit Aer)",
+        "actual_qaoa_p": p,
+        "actual_parameter_count": n_parameters,
+        "configured_max_iterations": max_iterations,
+        "actual_optimizer_iterations": eval_count,
         "n_qubits": n,
-        "p_layers": p,
-        "opt_gamma": float(opt_gamma),
-        "opt_beta": float(opt_beta),
+        "opt_gammas": [float(g) for g in opt_gammas],
+        "opt_betas": [float(b) for b in opt_betas],
         "shots": total_samples,
-        "feasible_rate": float(feasible_count / total_samples),
-        "best_probability": float(best_prob),
+        "feasible_rate": feasible_rate,
+        "best_probability": best_prob,
         "runtime_sec": runtime,
-        "bitstrings_evaluated": len(bitstring_records),
-        "is_feasible": int(np.sum(best_x)) == k_target
+        "status": status,
+        "is_feasible": best_x is not None
     }
 
     return best_x, best_cost, runtime, metrics

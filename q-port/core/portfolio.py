@@ -113,23 +113,80 @@ def optimize_continuous_weights(
 
     if res.success:
         w_opt = res.x
-        w_opt = np.clip(w_opt, 0.0, 1.0)
-        w_opt = w_opt / np.sum(w_opt)  # Normalize
+        w_opt = np.clip(w_opt, min_weight, max_weight)
+        sum_w = np.sum(w_opt)
+        if sum_w > 1e-12:
+            w_opt = w_opt / sum_w  # Normalize
+
+        # Post-solution constraint validation (1e-6 tolerance)
+        violations = []
+        if abs(np.sum(w_opt) - 1.0) > 1e-6:
+            violations.append(f"Weight sum {np.sum(w_opt):.8f} != 1.0")
+
+        if np.any(w_opt > max_weight + 1e-6):
+            violations.append(f"Max weight limit ({max_weight:.1%}) exceeded by asset(s)")
+
+        if np.any(w_opt < min_weight - 1e-6):
+            violations.append(f"Min weight limit ({min_weight:.1%}) violated")
+
+        if metadata_df is not None and "Sector" in metadata_df.columns and max_sector_weight < 1.0:
+            selected_sectors = metadata_df.iloc[selected_indices]["Sector"].tolist()
+            for sec in set(selected_sectors):
+                sec_mask = np.array([s == sec for s in selected_sectors], dtype=float)
+                sec_w = float(np.dot(w_opt, sec_mask))
+                if sec_w > max_sector_weight + 1e-6:
+                    violations.append(f"Sector '{sec}' weight ({sec_w:.1%}) exceeds limit ({max_sector_weight:.1%})")
+
+        if target_return is not None:
+            ret_achieved = float(np.dot(w_opt, mu_sub))
+            if ret_achieved < target_return - 1e-6:
+                violations.append(f"Target return ({target_return:.2%}) not met ({ret_achieved:.2%})")
+
+        if target_volatility is not None and target_volatility > 0:
+            vol_achieved = float(np.sqrt(max(0.0, np.dot(w_opt, np.dot(cov_sub, w_opt)))))
+            if vol_achieved > target_volatility + 1e-6:
+                violations.append(f"Target volatility ({target_volatility:.2%}) exceeded ({vol_achieved:.2%})")
+
+        if len(violations) > 0:
+            full_weights[selected_indices] = 0.0
+            stats = compute_portfolio_stats(
+                weights=full_weights,
+                expected_returns=expected_returns,
+                cov_matrix=cov_matrix,
+                returns_df=returns_df,
+                metadata_df=metadata_df,
+                risk_free_rate=risk_free_rate
+            )
+            stats["stage_b_success"] = False
+            stats["status"] = "constraint_violation"
+            stats["stage_b_message"] = "Post-optimization constraint violations: " + " | ".join(violations)
+            return stats
+
+        full_weights[selected_indices] = w_opt
+        stats = compute_portfolio_stats(
+            weights=full_weights,
+            expected_returns=expected_returns,
+            cov_matrix=cov_matrix,
+            returns_df=returns_df,
+            metadata_df=metadata_df,
+            risk_free_rate=risk_free_rate
+        )
+        stats["stage_b_success"] = True
+        stats["status"] = "success"
+        stats["stage_b_message"] = res.message
+        return stats
     else:
-        # Fallback to equal weighting across selected assets if SLSQP fails
-        w_opt = w0
-
-    full_weights[selected_indices] = w_opt
-
-    stats = compute_portfolio_stats(
-        weights=full_weights,
-        expected_returns=expected_returns,
-        cov_matrix=cov_matrix,
-        returns_df=returns_df,
-        metadata_df=metadata_df,
-        risk_free_rate=risk_free_rate
-    )
-    stats["stage_b_success"] = res.success
-    stats["stage_b_message"] = res.message
-
-    return stats
+        # SLSQP failed -> DO NOT fall back to equal weighting! Mark failed and zero weights.
+        full_weights.fill(0.0)
+        stats = compute_portfolio_stats(
+            weights=full_weights,
+            expected_returns=expected_returns,
+            cov_matrix=cov_matrix,
+            returns_df=returns_df,
+            metadata_df=metadata_df,
+            risk_free_rate=risk_free_rate
+        )
+        stats["stage_b_success"] = False
+        stats["status"] = "optimization_failed"
+        stats["stage_b_message"] = f"Stage-B SLSQP continuous optimization failed: {res.message}"
+        return stats

@@ -50,6 +50,8 @@ class OptimizationRequest(BaseModel):
     max_sector_weight: float = Field(default=0.50, description="Maximum sector weight")
     selected_tickers: Optional[List[str]] = Field(default=None, description="Optional custom tickers subset")
     solver: str = Field(default="qaoa", description="qaoa, greedy, sa, or exact")
+    qaoa_p: int = Field(default=2, description="QAOA p-layers")
+    shots: int = Field(default=2048, description="QAOA measurement shots")
     force_bundled: bool = Field(default=True, description="Force bundled dataset for Judge Mode")
 
 
@@ -61,6 +63,8 @@ class BenchmarkRequest(BaseModel):
     max_sector_weight: float = Field(default=0.50, description="Max sector weight")
     run_qaoa: bool = Field(default=True, description="Include QAOA solver")
     run_exact: bool = Field(default=True, description="Include exact solver")
+    qaoa_p: int = Field(default=2, description="QAOA p-layers")
+    qaoa_shots: int = Field(default=2048, description="QAOA measurement shots")
     force_bundled: bool = Field(default=True, description="Force bundled dataset")
 
 
@@ -68,6 +72,7 @@ class BacktestRequest(BaseModel):
     train_window_days: int = Field(default=252, description="In-sample training days")
     test_window_days: int = Field(default=63, description="Out-of-sample test days")
     k_target: int = Field(default=5, description="Target portfolio size")
+    run_qaoa_in_backtest: bool = Field(default=False, description="Run real QAOA in backtest")
     force_bundled: bool = Field(default=True, description="Force bundled dataset")
 
 
@@ -122,7 +127,7 @@ def optimize_portfolio(req: OptimizationRequest):
 
     # Solve Stage A
     if req.solver == "qaoa" and n <= 24:
-        best_x, best_cost, runtime, solver_metrics = solve_qaoa(Q, offset, k_target, p=1, shots=1024)
+        best_x, best_cost, runtime, solver_metrics = solve_qaoa(Q, offset, k_target, p=req.qaoa_p, shots=req.shots)
     elif req.solver == "sa":
         best_x, best_cost, runtime, solver_metrics = solve_simulated_annealing(Q, offset, k_target)
     elif req.solver == "exact" and n <= 22:
@@ -208,6 +213,8 @@ def run_benchmark(req: BenchmarkRequest):
         max_sector_weight=req.max_sector_weight,
         run_qaoa=req.run_qaoa,
         run_exact=req.run_exact,
+        qaoa_p=req.qaoa_p,
+        qaoa_shots=req.qaoa_shots,
         seed=42
     )
 
@@ -229,7 +236,8 @@ def run_backtest(req: BacktestRequest):
         metadata_df=meta_df,
         k_target=req.k_target,
         train_window_days=req.train_window_days,
-        test_window_days=req.test_window_days
+        test_window_days=req.test_window_days,
+        run_qaoa_in_backtest=req.run_qaoa_in_backtest
     )
 
     # Format equity curves for JSON chart plotting

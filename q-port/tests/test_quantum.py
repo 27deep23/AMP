@@ -49,7 +49,7 @@ def test_qubit_ceiling_enforcement():
     dummy_Q = np.zeros((25, 25))
     with pytest.raises(InvalidParameterError) as exc_info:
         solve_qaoa(dummy_Q, offset=0.0, k_target=5, max_qubits=24)
-    assert "exceeds maximum local CPU limit" in str(exc_info.value)
+    assert "exceeds maximum local CPU ceiling" in str(exc_info.value)
 
 
 def test_hardware_provider_banned():

@@ -27,7 +27,7 @@ def test_walk_forward_backtest_execution():
     assert btest_info["total_oos_days"] > 0
 
     strats = metrics_df["Strategy"].tolist()
-    assert "Q-PORT (Hybrid QAOA)" in strats
+    assert btest_info["qport_label"] in strats
     assert "Equal Weight (1/N)" in strats
     assert "Continuous Mean-Variance" in strats
 
