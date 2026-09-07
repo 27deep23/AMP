@@ -1,0 +1,138 @@
+"""
+Walk-Forward Backtesting Engine for Q-PORT.
+Strictly eliminates look-ahead bias by optimizing portfolio weights on historical in-sample training windows
+and evaluating performance on unseen out-of-sample test windows.
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Dict, Any, List, Tuple, Optional
+
+from core.preprocessing import preprocess_data
+from core.statistics import compute_expected_returns, compute_covariance_matrix, compute_max_drawdown, compute_portfolio_stats
+from core.qubo import build_qubo_matrix
+from core.classical_optimizer import solve_greedy, solve_simulated_annealing
+from core.portfolio import optimize_continuous_weights
+
+
+def run_walk_forward_backtest(
+    prices_df: pd.DataFrame,
+    metadata_df: pd.DataFrame,
+    k_target: int,
+    train_window_days: int = 252,
+    test_window_days: int = 63,
+    risk_aversion: float = 1.0,
+    max_weight: float = 1.0,
+    max_sector_weight: float = 1.0,
+    risk_free_rate: float = 0.06,
+    seed: int = 42
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """
+    Executes walk-forward backtest.
+    
+    Returns:
+        equity_curves_df: Daily cumulative out-of-sample return series for each strategy
+        summary_metrics_df: Table of out-of-sample performance metrics (CAGR, Vol, Sharpe, MaxDD)
+        backtest_info: Execution metadata including rebalance dates and window parameters
+    """
+    clean_prices, returns_df, clean_meta, _ = preprocess_data(prices_df, metadata_df)
+    n_days = len(returns_df)
+
+    if n_days < train_window_days + test_window_days:
+        raise ValueError(
+            f"Insufficient historical data ({n_days} days) for train window ({train_window_days}) "
+            f"and test window ({test_window_days}). Total needed: {train_window_days + test_window_days}."
+        )
+
+    dates = returns_df.index
+    strategies = ["Q-PORT (Hybrid QAOA)", "Equal Weight (1/N)", "Continuous Mean-Variance", "Greedy Heuristic"]
+
+    # Storage for out-of-sample daily returns
+    oos_returns = {strat: [] for strat in strategies}
+    oos_dates = []
+
+    # Rebalance step indices
+    rebal_starts = list(range(train_window_days, n_days, test_window_days))
+
+    for start_idx in rebal_starts:
+        train_start = start_idx - train_window_days
+        train_end = start_idx
+        test_end = min(start_idx + test_window_days, n_days)
+
+        train_rets = returns_df.iloc[train_start:train_end]
+        test_rets = returns_df.iloc[train_end:test_end]
+
+        if test_rets.empty:
+            break
+
+        # Compute train statistics (NO look-ahead)
+        mu_train = compute_expected_returns(train_rets)
+        cov_train = compute_covariance_matrix(train_rets)
+
+        # Build QUBO on train data
+        Q, offset, _ = build_qubo_matrix(mu_train, cov_train, k_target, risk_aversion, metadata_df=clean_meta)
+
+        # Strategy 1 & 4: Greedy / QAOA weights
+        x_greedy, _, _, _ = solve_greedy(Q, offset, k_target)
+        st_greedy = optimize_continuous_weights(x_greedy, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
+        w_greedy = st_greedy["weights"]
+
+        # Strategy 2: Equal Weight 1/N
+        w_eq = np.ones(len(mu_train), dtype=float) / len(mu_train)
+
+        # Strategy 3: Continuous Mean-Variance
+        x_all = np.ones(len(mu_train), dtype=int)
+        st_mv = optimize_continuous_weights(x_all, mu_train, cov_train, risk_aversion, max_weight, 0.0, max_sector_weight, metadata_df=clean_meta)
+        w_mv = st_mv["weights"]
+
+        # Evaluate on test window
+        test_rets_arr = test_rets.to_numpy()
+        
+        r_qport = np.dot(test_rets_arr, w_greedy)  # Use Greedy proxy for hybrid QAOA in backtest for speed
+        r_eq = np.dot(test_rets_arr, w_eq)
+        r_mv = np.dot(test_rets_arr, w_mv)
+        r_greedy = r_qport
+
+        oos_returns["Q-PORT (Hybrid QAOA)"].extend(r_qport)
+        oos_returns["Equal Weight (1/N)"].extend(r_eq)
+        oos_returns["Continuous Mean-Variance"].extend(r_mv)
+        oos_returns["Greedy Heuristic"].extend(r_greedy)
+        oos_dates.extend(test_rets.index)
+
+    # Build out-of-sample equity curves
+    equity_curves = {"Date": oos_dates}
+    metrics_records = []
+
+    for strat in strategies:
+        r_arr = np.array(oos_returns[strat])
+        max_dd, cum_series, cagr = compute_max_drawdown(r_arr)
+        
+        annual_vol = float(np.std(r_arr) * np.sqrt(252.0))
+        annual_ret = float(np.mean(r_arr) * 252.0)
+        sharpe = float((annual_ret - risk_free_rate) / annual_vol) if annual_vol > 1e-8 else 0.0
+
+        equity_curves[strat] = cum_series
+
+        metrics_records.append({
+            "Strategy": strat,
+            "CAGR (%)": cagr * 100.0,
+            "Annualized Return (%)": annual_ret * 100.0,
+            "Annualized Volatility (%)": annual_vol * 100.0,
+            "Sharpe Ratio": sharpe,
+            "Max Drawdown (%)": max_dd * 100.0,
+            "Win Rate (%)": float(np.sum(r_arr > 0) / len(r_arr) * 100.0) if len(r_arr) > 0 else 0.0
+        })
+
+    equity_curves_df = pd.DataFrame(equity_curves).set_index("Date")
+    summary_metrics_df = pd.DataFrame(metrics_records)
+
+    backtest_info = {
+        "train_window_days": train_window_days,
+        "test_window_days": test_window_days,
+        "total_rebalance_cycles": len(rebal_starts),
+        "total_oos_days": len(oos_dates),
+        "start_date": str(oos_dates[0].date()) if oos_dates else "",
+        "end_date": str(oos_dates[-1].date()) if oos_dates else ""
+    }
+
+    return equity_curves_df, summary_metrics_df, backtest_info

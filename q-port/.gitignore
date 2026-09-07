@@ -1,0 +1,23 @@
+# Environments & Dependencies
+.venv/
+venv/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+
+# Python Bytecode & Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+data/cache/
+
+# System & OS
+.DS_Store
+Thumbs.db
+*.log
+.env
+.streamlit/secrets.toml
