@@ -172,18 +172,42 @@ def solve_qaoa(
     # Initial parameter guess: [0.5, 0.5] repeated p times
     init_params = np.tile([0.5, 0.5], p)
 
-    # Choose outer-loop optimizer
-    opt_method = "COBYLA" if optimizer_name.upper() == "COBYLA" else "Nelder-Mead"
+    # Choose outer-loop optimizer: genuine COBYLA or SPSA
+    opt_name = optimizer_name.upper()
+    if opt_name == "SPSA":
+        # Genuine Simultaneous Perturbation Stochastic Approximation (SPSA)
+        rng_spsa = np.random.default_rng(seed)
+        best_params = init_params.copy().astype(float)
+        p_len = len(best_params)
+        spsa_a = 0.1
+        spsa_c = 0.1
+        spsa_A = max(10, int(0.1 * max_iterations))
 
-    res = minimize(
-        qaoa_objective,
-        x0=init_params,
-        method=opt_method,
-        options={"maxiter": max_iterations}
-    )
+        for k_iter in range(max_iterations):
+            if time.perf_counter() >= deadline:
+                timed_out = True
+                break
+            ak = spsa_a / ((k_iter + 1 + spsa_A) ** 0.602)
+            ck = spsa_c / ((k_iter + 1) ** 0.101)
+            delta = rng_spsa.choice([-1.0, 1.0], size=p_len)
+            x_plus = best_params + ck * delta
+            x_minus = best_params - ck * delta
+            f_plus = qaoa_objective(x_plus)
+            f_minus = qaoa_objective(x_minus)
+            ghat = (f_plus - f_minus) / (2.0 * ck * delta)
+            best_params = best_params - ak * ghat
+    else:
+        # Default COBYLA
+        res = minimize(
+            qaoa_objective,
+            x0=init_params,
+            method="COBYLA",
+            options={"maxiter": max_iterations}
+        )
+        best_params = res.x
 
-    opt_gammas = res.x[0::2]
-    opt_betas = res.x[1::2]
+    opt_gammas = best_params[0::2]
+    opt_betas = best_params[1::2]
 
     # Pre-final measurement deadline check
     if time.perf_counter() >= deadline:

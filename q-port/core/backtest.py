@@ -60,6 +60,7 @@ def run_walk_forward_backtest(
     # Storage for out-of-sample daily returns
     oos_returns = {strat: [] for strat in strategies}
     oos_dates = []
+    qaoa_period_statuses = []
 
     # Rebalance step indices
     rebal_starts = list(range(train_window_days, n_days, test_window_days))
@@ -115,6 +116,8 @@ def run_walk_forward_backtest(
         else:
             # QAOA not executed in backtest config - mark period unavailable with zero return, NEVER substitute Greedy
             w_qport = np.zeros(len(mu_train))
+
+        qaoa_period_statuses.append(qaoa_status)
 
         # Equal Weight 1/N
         w_eq = np.ones(len(mu_train), dtype=float) / len(mu_train)
@@ -175,10 +178,11 @@ def run_walk_forward_backtest(
         "qaoa_real_execution": use_real_qaoa,
         "qport_label": qport_label,
         "periods_evaluated": len(rebal_starts),
-        "successful_qaoa_periods": len(rebal_starts) if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status == "success"),
-        "failed_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status in ["failed", "optimization_failed"]),
-        "timeout_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status == "timeout"),
-        "unavailable_periods": 0 if not use_real_qaoa else sum(1 for _ in rebal_starts if qaoa_status in ["no_feasible_solution", "timeout", "failed"])
+        "qaoa_period_statuses": qaoa_period_statuses,
+        "successful_qaoa_periods": sum(1 for s in qaoa_period_statuses if s == "success"),
+        "failed_periods": sum(1 for s in qaoa_period_statuses if s in ["failed", "optimization_failed", "no_feasible_solution"]),
+        "timeout_periods": sum(1 for s in qaoa_period_statuses if s == "timeout"),
+        "unavailable_periods": sum(1 for s in qaoa_period_statuses if s in ["not_executed", "proxy"])
     }
 
     return equity_curves_df, summary_metrics_df, backtest_info

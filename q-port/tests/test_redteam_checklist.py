@@ -179,3 +179,19 @@ def test_benchmark_runtime_measurement():
         assert row["Runtime (s)"] > 0.0
         assert row["Runtime (s)"] != 0.001
         assert row["Runtime (s)"] != 0.01
+
+
+def test_backtest_period_status_tracking():
+    """Verify qaoa_period_statuses is recorded per period and aggregate counts are calculated from the list."""
+    prices_df, meta_df, _ = fetch_market_data(force_bundled=True)
+    eq_curves, summary, b_info = run_walk_forward_backtest(
+        prices_df=prices_df,
+        metadata_df=meta_df,
+        k_target=3,
+        train_window_days=126,
+        test_window_days=42,
+        run_qaoa_in_backtest=False
+    )
+    assert "qaoa_period_statuses" in b_info
+    assert len(b_info["qaoa_period_statuses"]) == b_info["total_rebalance_cycles"]
+    assert b_info["unavailable_periods"] == b_info["total_rebalance_cycles"]
