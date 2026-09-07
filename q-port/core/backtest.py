@@ -15,6 +15,9 @@ from core.classical_optimizer import solve_greedy, solve_simulated_annealing
 from core.portfolio import optimize_continuous_weights
 
 
+from config.settings import DEFAULT_QAOA_P, DEFAULT_SHOTS
+
+
 def run_walk_forward_backtest(
     prices_df: pd.DataFrame,
     metadata_df: pd.DataFrame,
@@ -27,8 +30,8 @@ def run_walk_forward_backtest(
     risk_free_rate: float = 0.06,
     seed: int = 42,
     run_qaoa_in_backtest: bool = False,
-    qaoa_p: int = 1,
-    qaoa_shots: int = 512
+    qaoa_p: int = DEFAULT_QAOA_P,
+    qaoa_shots: int = DEFAULT_SHOTS
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     """
     Executes walk-forward backtest.

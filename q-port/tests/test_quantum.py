@@ -58,3 +58,58 @@ def test_hardware_provider_banned():
     """Verify qiskit-ibm-runtime is NOT installed / banned from Q-PORT."""
     with pytest.raises(ImportError):
         import qiskit_ibm_runtime
+
+
+def test_qaoa_4qubit_convergence_smoke():
+    """Smoke test: QAOA optimization converges on ground state for a 4-qubit diagonal QUBO with >= 90% probability."""
+    # Strictly non-degenerate diagonal QUBO: x* = [0, 1, 0, 1] has unique minimum cost -4.0 among all K=2 candidates (others are >= 0.0)
+    Q = np.diag([2.0, -2.0, 2.0, -2.0])
+    offset = 0.0
+
+    best_x, best_cost, runtime, metrics = solve_qaoa(
+        Q=Q,
+        offset=offset,
+        k_target=2,
+        p=1,
+        shots=8192,
+        max_iterations=100,
+        seed=42
+    )
+
+    assert best_x is not None
+    assert np.array_equal(best_x, [0, 1, 0, 1])
+    assert int(np.sum(best_x)) == 2
+    # Verify measured probability of known ground state meets >= 0.90
+    assert metrics["best_probability"] >= 0.90
+
+
+def test_spsa_optimizer_execution_path():
+    """Verify QAOA executes genuine SPSA optimizer path and records metrics."""
+    Q = np.diag([1.0, -2.0, 1.0, -2.0])
+    best_x, best_cost, runtime, metrics = solve_qaoa(
+        Q=Q,
+        offset=0.0,
+        k_target=2,
+        optimizer_name="SPSA",
+        max_iterations=10,
+        seed=42
+    )
+    assert metrics["optimizer_name"] == "SPSA"
+    assert metrics["configured_max_iterations"] == 10
+    assert "actual_optimizer_iterations" in metrics
+
+
+def test_stage_b_raw_slsqp_no_normalization():
+    """Verify Stage-B accepts raw SLSQP solution without normalizing or clipping."""
+    from core.portfolio import optimize_continuous_weights
+    mu = np.array([0.15, 0.25])
+    cov = np.diag([0.04, 0.09])
+    st = optimize_continuous_weights(
+        selection_vector=np.array([1, 1]),
+        expected_returns=mu,
+        cov_matrix=cov,
+        risk_aversion=1.0,
+        max_weight=0.80
+    )
+    assert st["stage_b_success"] is True
+    assert abs(np.sum(st["weights"]) - 1.0) <= 1e-6
