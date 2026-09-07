@@ -16,6 +16,9 @@ from core.portfolio import optimize_continuous_weights
 from core.statistics import compute_portfolio_stats
 
 
+from config.settings import DEFAULT_QAOA_P, DEFAULT_SHOTS
+
+
 def run_benchmark_suite(
     returns_df: pd.DataFrame,
     metadata_df: pd.DataFrame,
@@ -27,8 +30,8 @@ def run_benchmark_suite(
     target_volatility: Optional[float] = None,
     run_qaoa: bool = True,
     run_exact: bool = True,
-    qaoa_p: int = 1,
-    qaoa_shots: int = 1024,
+    qaoa_p: int = DEFAULT_QAOA_P,
+    qaoa_shots: int = DEFAULT_SHOTS,
     risk_free_rate: float = 0.06,
     seed: int = 42
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -185,10 +188,14 @@ def run_benchmark_suite(
         "reference_baseline_name": ref_name,
         "reference_cost": ref_cost,
         "is_exact_reference": has_exact,
+        "optimality_certified": has_exact,
         "gap_column_name": gap_col_name,
         "n_assets": n,
         "k_target": k_target,
-        "risk_aversion": risk_aversion
+        "risk_aversion": risk_aversion,
+        "qaoa_p": qaoa_p,
+        "qaoa_shots": qaoa_shots,
+        "seed": seed
     }
 
     return results_df, benchmark_info

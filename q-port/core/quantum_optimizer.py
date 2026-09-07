@@ -204,8 +204,28 @@ def solve_qaoa(
     runtime = t1 - t0
 
     # Post-Aer deadline check
-    if runtime >= max_runtime_sec:
+    if runtime >= max_runtime_sec or timed_out:
         timed_out = True
+        metrics = {
+            "solver_type": "QAOA Quantum Engine (Qiskit Aer)",
+            "actual_qaoa_p": p,
+            "actual_parameter_count": n_parameters,
+            "configured_max_iterations": max_iterations,
+            "actual_optimizer_iterations": eval_count,
+            "optimizer_name": optimizer_name,
+            "n_qubits": n,
+            "opt_gammas": [float(g) for g in opt_gammas],
+            "opt_betas": [float(b) for b in opt_betas],
+            "optimization_shots": shots,
+            "final_measurement_shots": shots,
+            "shots": shots,
+            "feasible_rate": 0.0,
+            "best_probability": 0.0,
+            "runtime_sec": runtime,
+            "status": "timeout",
+            "is_feasible": False
+        }
+        return None, None, runtime, metrics
 
     if not timed_out and len(final_counts) > 0:
         # Process all sampled bitstrings and filter for FEASIBLE candidates ONLY (sum x_i == K)
