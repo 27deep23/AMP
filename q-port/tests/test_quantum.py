@@ -38,9 +38,11 @@ def test_qaoa_2qubit_smoke_test():
     
     best_x, best_cost, runtime, metrics = solve_qaoa(Q, offset, k_target=1, seed=42)
     
+    assert best_x is not None
     assert len(best_x) == 2
     assert int(np.sum(best_x)) == 1
     assert metrics["feasible_rate"] > 0.0
+    assert metrics["best_probability"] >= 0.40
     assert metrics["solver_type"] == "QAOA Quantum Engine (Qiskit Aer)"
 
 

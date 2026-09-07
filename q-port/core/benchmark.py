@@ -83,7 +83,8 @@ def run_benchmark_suite(
     if run_exact and n <= 22:
         try:
             x_exact, cost_exact, t_exact, m_exact = solve_exact_enumeration(Q, offset, k_target)
-            if x_exact is not None and m_exact.get("is_exact", False):
+            has_exact = bool(m_exact.get("is_exact", False))
+            if x_exact is not None and has_exact:
                 stats_exact = optimize_continuous_weights(
                     x_exact, mu, cov, risk_aversion, max_weight, 0.0, max_sector_weight,
                     target_return, target_volatility, returns_df, metadata_df, risk_free_rate
@@ -95,7 +96,6 @@ def run_benchmark_suite(
                     "stats": stats_exact,
                     "is_exact": True
                 }
-                has_exact = True
             else:
                 has_exact = False
         except Exception:

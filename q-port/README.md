@@ -28,7 +28,7 @@ or risk-management constraints on sector concentration.
 
 QAOA is a variational quantum algorithm that can encode combinatorial
 optimisation problems naturally. The asset-selection stage maps directly to
-a QUBO, making it a candidate for quantum speedup. However:
+a QUBO, making it a candidate for quantum optimization. However:
 
 - Current quantum simulation does not demonstrate general quantum advantage.
 - Simulated QAOA performance depends on encoding, circuit depth, and instance size.

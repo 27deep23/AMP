@@ -11,11 +11,11 @@ from config.settings import SMOKE_TEST_MIN_PROBABILITY
 
 def test_qaoa_4qubit_convergence_smoke():
     """Smoke test: QAOA optimization converges on ground state for a 4-qubit diagonal QUBO with >= 90% probability."""
-    # Diagonal QUBO with known optimal ground state x* where probability reaches >= 0.90
+    # Strictly non-degenerate diagonal QUBO: x* = [0, 1, 0, 1] has unique minimum cost -4.0 among all K=2 candidates (others are >= 0.0)
     Q = np.diag([2.0, -2.0, 2.0, -2.0])
     offset = 0.0
 
-    # Target K=2 to match optimal cardinality
+    # Target K=2 to match optimal cardinality (x* = [0, 1, 0, 1])
     best_x, best_cost, runtime, metrics = solve_qaoa(
         Q=Q,
         offset=offset,
@@ -27,6 +27,7 @@ def test_qaoa_4qubit_convergence_smoke():
     )
 
     assert best_x is not None
+    assert np.array_equal(best_x, [0, 1, 0, 1])
     assert int(np.sum(best_x)) == 2
     # Verify measured probability of known ground state meets >= 0.90
     assert metrics["best_probability"] >= SMOKE_TEST_MIN_PROBABILITY
