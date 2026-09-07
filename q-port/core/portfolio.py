@@ -122,11 +122,9 @@ def optimize_continuous_weights(
 
         violations = []
 
-        # Check raw weight sum before any adjustments
+        # Validate raw SLSQP output w_opt against tolerances without clipping or normalization
         if abs(sum_w - 1.0) > SUM_TOLERANCE:
             violations.append(f"Raw weight sum {sum_w:.8f} != 1.0 (exceeds sum tolerance {SUM_TOLERANCE})")
-        else:
-            w_opt = w_opt / sum_w  # Normalize tiny numerical drift
 
         if np.any(w_opt > max_weight + CONSTRAINT_TOLERANCE):
             violations.append(f"Max weight limit ({max_weight:.1%}) exceeded")

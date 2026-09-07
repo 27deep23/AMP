@@ -147,3 +147,35 @@ def test_exact_result_terminology():
     assert bench_info["is_exact_reference"] is True
     assert bench_info["reference_baseline_name"] == "Exact Optimum"
     assert bench_info["gap_column_name"] == "Optimality Gap (%)"
+
+
+def test_no_greedy_as_qaoa_backtest_fallback():
+    """Verify backtest never substitutes Greedy weights for QAOA strategy when QAOA is not run or fails."""
+    prices_df, meta_df, _ = fetch_market_data(force_bundled=True)
+    eq_curves, summary, b_info = run_walk_forward_backtest(
+        prices_df=prices_df,
+        metadata_df=meta_df,
+        k_target=5,
+        train_window_days=126,
+        test_window_days=42,
+        run_qaoa_in_backtest=False  # QAOA disabled -> QAOA strategy returns zero weights, NOT Greedy!
+    )
+    # When QAOA is disabled, Q-PORT cumulative returns should be zero (horizontal curve starting at 1.0)
+    qport_rets = eq_curves["Q-PORT (Hybrid QAOA)"].to_numpy()
+    greedy_rets = eq_curves["Greedy Heuristic"].to_numpy()
+    assert not np.array_equal(qport_rets, greedy_rets)
+    assert np.all(qport_rets == 1.0)
+
+
+def test_benchmark_runtime_measurement():
+    """Verify Equal Weight and Continuous Mean-Variance in benchmark use real measured timing > 0.0."""
+    prices_df, meta_df, _ = fetch_market_data(force_bundled=True)
+    clean_prices, returns_df, clean_meta, _ = preprocess_data(prices_df, meta_df)
+    sub_rets = returns_df.iloc[:, :5]
+    sub_meta = clean_meta.iloc[:5]
+
+    res_df, bench_info = run_benchmark_suite(sub_rets, sub_meta, k_target=2, run_qaoa=False, run_exact=False)
+    for idx, row in res_df.iterrows():
+        assert row["Runtime (s)"] > 0.0
+        assert row["Runtime (s)"] != 0.001
+        assert row["Runtime (s)"] != 0.01

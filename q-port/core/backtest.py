@@ -52,8 +52,8 @@ def run_walk_forward_backtest(
     dates = returns_df.index
     n_assets = returns_df.shape[1]
 
-    use_real_qaoa = run_qaoa_in_backtest and (n_assets <= 20)
-    qport_label = "Q-PORT (Hybrid QAOA)" if use_real_qaoa else "Q-PORT (Classical Proxy Backtest)"
+    use_real_qaoa = run_qaoa_in_backtest and (n_assets <= 24)
+    qport_label = "Q-PORT (Hybrid QAOA)"
 
     strategies = [qport_label, "Equal Weight (1/N)", "Continuous Mean-Variance", "Greedy Heuristic"]
 
@@ -88,9 +88,9 @@ def run_walk_forward_backtest(
         w_greedy = st_greedy["weights"]
 
         # Q-PORT weights calculation
-        qaoa_status = "proxy"
+        qaoa_status = "not_executed"
         qaoa_runtime = 0.0
-        qaoa_feasible = True
+        qaoa_feasible = False
 
         if use_real_qaoa:
             try:
@@ -113,7 +113,8 @@ def run_walk_forward_backtest(
                 qaoa_feasible = False
                 w_qport = np.zeros(len(mu_train))
         else:
-            w_qport = w_greedy
+            # QAOA not executed in backtest config - mark period unavailable with zero return, NEVER substitute Greedy
+            w_qport = np.zeros(len(mu_train))
 
         # Equal Weight 1/N
         w_eq = np.ones(len(mu_train), dtype=float) / len(mu_train)
