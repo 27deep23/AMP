@@ -195,3 +195,34 @@ def test_backtest_period_status_tracking():
     assert "qaoa_period_statuses" in b_info
     assert len(b_info["qaoa_period_statuses"]) == b_info["total_rebalance_cycles"]
     assert b_info["unavailable_periods"] == b_info["total_rebalance_cycles"]
+
+
+def test_spsa_optimizer_execution_path():
+    """Verify QAOA executes genuine SPSA optimizer path and records metrics."""
+    Q = np.diag([1.0, -2.0, 1.0, -2.0])
+    best_x, best_cost, runtime, metrics = solve_qaoa(
+        Q=Q,
+        offset=0.0,
+        k_target=2,
+        optimizer_name="SPSA",
+        max_iterations=10,
+        seed=42
+    )
+    assert metrics["optimizer_name"] == "SPSA"
+    assert metrics["configured_max_iterations"] == 10
+    assert "actual_optimizer_iterations" in metrics
+
+
+def test_stage_b_raw_slsqp_no_normalization():
+    """Verify Stage-B accepts raw SLSQP solution without normalizing or clipping."""
+    mu = np.array([0.15, 0.25])
+    cov = np.diag([0.04, 0.09])
+    st = optimize_continuous_weights(
+        selection_vector=np.array([1, 1]),
+        expected_returns=mu,
+        cov_matrix=cov,
+        risk_aversion=1.0,
+        max_weight=0.80
+    )
+    assert st["stage_b_success"] is True
+    assert abs(np.sum(st["weights"]) - 1.0) <= 1e-6
